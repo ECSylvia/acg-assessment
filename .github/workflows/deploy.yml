@@ -35,6 +35,8 @@ jobs:
       - name: Build Frontend
         working-directory: ./acg-assessment
         run: npm run build
+        env:
+          VITE_API_URL: https://hw7u5aips6.execute-api.us-east-1.amazonaws.com/prod/
 
       - name: Install CDK Dependencies
         working-directory: ./acg-assessment-cdk
