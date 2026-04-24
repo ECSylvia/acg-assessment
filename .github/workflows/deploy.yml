@@ -45,5 +45,3 @@ jobs:
       - name: CDK Deploy
         working-directory: ./acg-assessment-cdk
         run: npx cdk deploy --require-approval never
-        env:
-          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}

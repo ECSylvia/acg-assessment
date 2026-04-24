@@ -65,7 +65,6 @@ export class AcgAssessmentCdkStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
       environment: {
         CANDIDATE_RECORDS_BUCKET: candidateRecordsBucket.bucketName,
-        PERPLEXITY_API_KEY: process.env.PERPLEXITY_API_KEY || '',
       },
       timeout: cdk.Duration.seconds(60),
     });
@@ -76,6 +75,12 @@ export class AcgAssessmentCdkStack extends cdk.Stack {
     submissionHandler.addToRolePolicy(new iam.PolicyStatement({
       actions: ['textract:DetectDocumentText', 'textract:AnalyzeDocument'],
       resources: ['*'],
+    }));
+
+    // Explicitly allow Amazon Bedrock for AI evaluations
+    submissionHandler.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock:InvokeModel'],
+      resources: ['arn:aws:bedrock:*::foundation-model/anthropic.claude-3-haiku-20240307-v1:0'],
     }));
 
     // Grant SES SendEmail permission

@@ -1,10 +1,12 @@
 const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 const { SESClient, SendEmailCommand } = require('@aws-sdk/client-ses');
 const { TextractClient, DetectDocumentTextCommand } = require('@aws-sdk/client-textract');
+const { BedrockRuntimeClient, InvokeModelCommand } = require('@aws-sdk/client-bedrock-runtime');
 
 const s3 = new S3Client({});
 const ses = new SESClient({});
 const textract = new TextractClient({});
+const bedrock = new BedrockRuntimeClient({});
 
 exports.handler = async (event) => {
     try {
@@ -64,15 +66,14 @@ exports.handler = async (event) => {
            }
         }
 
-        // --- 2. Perplexity `sonar-pro` API Evaluation ---
+        // --- 2. Amazon Bedrock Claude 3 Haiku API Evaluation ---
         let simulatedPerplexityEvaluation = {
             status: "evaluating",
-            note: "Perplexity AI analysis pipeline skipped. Key missing.",
+            note: "AI analysis pipeline skipped. AWS Bedrock failure.",
             suggestedScore: "Pending"
         };
 
-        if (process.env.PERPLEXITY_API_KEY) {
-            const prompt = `
+        const prompt = `
 You are an expert technical recruiter and AI grader evaluating a candidate's pre-hire assessment.
 Candidate Role: ${body.candidate.role}
 Candidate Name: ${body.candidate.name}
@@ -92,40 +93,37 @@ You must output a JSON object exactly like this:
 }
 Do not include any markdown formatting like \`\`\`json in your response, just the raw JSON object.
 `;
-            try {
-                const apiRes = await fetch("https://api.perplexity.ai/chat/completions", {
-                    method: "POST",
-                    headers: {
-                        "Authorization": `Bearer ${process.env.PERPLEXITY_API_KEY}`,
-                        "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify({
-                        model: "sonar-pro",
-                        messages: [
-                            { role: "system", content: "You are a JSON-only API. You output raw valid JSON without markdown wrapping." },
-                            { role: "user", content: prompt }
-                        ]
-                    })
-                });
-                
-                if (apiRes.ok) {
-                    const data = await apiRes.json();
-                    let content = data.choices[0].message.content;
-                    content = content.replace(/```json/g, '').replace(/```/g, '').trim();
-                    const parsed = JSON.parse(content);
-                    simulatedPerplexityEvaluation = {
-                        status: "completed",
-                        note: parsed.note || "Evaluated by Perplexity Sonar-Pro.",
-                        suggestedScore: parsed.suggestedScore || "Yellow"
-                    };
-                } else {
-                    console.error("Perplexity API error", await apiRes.text());
-                    simulatedPerplexityEvaluation.note = "Perplexity API returned an error.";
-                }
-            } catch (err) {
-                console.error("Failed to call Perplexity", err);
-                simulatedPerplexityEvaluation.note = "Failed to reach Perplexity API or parse response.";
-            }
+
+        try {
+            const command = new InvokeModelCommand({
+                modelId: "anthropic.claude-3-haiku-20240307-v1:0",
+                contentType: "application/json",
+                accept: "application/json",
+                body: JSON.stringify({
+                    anthropic_version: "bedrock-2023-05-31",
+                    max_tokens: 1000,
+                    system: "You are a JSON-only API. You output raw valid JSON without markdown wrapping.",
+                    messages: [
+                        { role: "user", content: prompt }
+                    ]
+                })
+            });
+
+            const response = await bedrock.send(command);
+            const rawRes = new TextDecoder().decode(response.body);
+            const data = JSON.parse(rawRes);
+            
+            let content = data.content[0].text;
+            content = content.replace(/```json/g, '').replace(/```/g, '').trim();
+            const parsed = JSON.parse(content);
+            simulatedPerplexityEvaluation = {
+                status: "completed",
+                note: parsed.note || "Evaluated by Amazon Bedrock (Claude 3 Haiku).",
+                suggestedScore: parsed.suggestedScore || "Yellow"
+            };
+        } catch (err) {
+            console.error("Failed to call Amazon Bedrock", err);
+            simulatedPerplexityEvaluation.note = "Failed to reach Amazon Bedrock API or parse response.";
         }
 
         const finalData = {
