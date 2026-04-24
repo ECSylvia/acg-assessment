@@ -3,8 +3,17 @@ import ReactMarkdown from 'react-markdown';
 import { Send, Clock, AlertTriangle, CheckCircle2, ChevronRight } from 'lucide-react';
 import { submitAssessment } from '../api/submitAssessment';
 import { uploadFile } from '../api/uploadFile';
-import { FileUp, Trash2 } from 'lucide-react';
+import { FileUp } from 'lucide-react';
 import type { CurrentUser } from './Header';
+
+// Global debug logger array
+const debugLogs: string[] = [];
+const addDebugLog = (msg: string) => {
+  const time = new Date().toLocaleTimeString();
+  debugLogs.push(`[${time}] ${msg}`);
+  // Dispatch custom event to update debug tray
+  window.dispatchEvent(new Event('debug-log'));
+};
 
 interface AssessmentEngineProps {
   markdownContent: string;
@@ -20,6 +29,13 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
 
   const [uploadKeys, setUploadKeys] = useState<string[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState<boolean>(false);
+  const [logs, setLogs] = useState<string[]>([]);
+
+  React.useEffect(() => {
+    const handleLog = () => setLogs([...debugLogs]);
+    window.addEventListener('debug-log', handleLog);
+    return () => window.removeEventListener('debug-log', handleLog);
+  }, []);
 
   // States for dynamic tracking
   const [startTime, setStartTime] = useState<Date | null>(null);
@@ -40,13 +56,19 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
     const folder = params.get('folder');
     
     if (inviteId) {
+      addDebugLog("Detected invite ID from URL: " + inviteId);
       const name = prefillName ? decodeURIComponent(prefillName) : '';
       setCandidate({ 
         name: name, 
         email: prefillEmail ? decodeURIComponent(prefillEmail) : '', 
         role: 'Agent' 
       });
-      if (folder) setFolderName(decodeURIComponent(folder));
+      if (folder) {
+        addDebugLog("Detected Candidate Folder: " + decodeURIComponent(folder));
+        setFolderName(decodeURIComponent(folder));
+      } else {
+        addDebugLog("WARNING: Candidate Folder ID missing from URL");
+      }
       
       setStartTime(new Date());
       setStepEnterTime(Date.now());
@@ -75,6 +97,7 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
     const timeSpent = (Date.now() - stepEnterTime) / 1000;
     const stepName = currentStep === 0 ? 'Intro' : `Task ${currentStep}`;
     setAnalyticsLog(prev => ({ ...prev, [stepName]: (prev[stepName] || 0) + timeSpent }));
+    addDebugLog(`Completed ${stepName} in ${timeSpent.toFixed(1)}s`);
     
     setStepEnterTime(Date.now());
     setCurrentStep(prev => prev + 1);
@@ -83,6 +106,7 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
   const handleSubmit = async () => {
     if (!hasStarted || !startTime) return;
     setIsSubmitting(true);
+    addDebugLog("Starting assessment submission...");
     
     const timeSpent = (Date.now() - stepEnterTime) / 1000;
     const finalLog = { ...analyticsLog, 'Final Review': timeSpent };
@@ -99,8 +123,10 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
         inviteId: new URLSearchParams(window.location.search).get('invite') || null,
         analyticsLog: finalLog
       });
+      addDebugLog("API Submission SUCCESS. Payload processed.");
       setIsSuccess(true);
     } catch (e) {
+      addDebugLog("API Submission FAILED: " + e);
       alert("There was an error submitting your assessment. Please try again.");
     } finally {
       setIsSubmitting(false);
@@ -110,16 +136,20 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     if (!folderName) {
+      addDebugLog("ERROR: Cannot upload without folderName");
       alert("Error: Missing Candidate Folder ID. Cannot upload.");
       return;
     }
     
     const file = e.target.files[0];
     setUploadingFiles(true);
+    addDebugLog(`Starting upload for ${file.name}...`);
     try {
       const key = await uploadFile(file, folderName);
+      addDebugLog(`Upload SUCCESS. Key: ${key}`);
       setUploadKeys(prev => [...prev, key]);
     } catch (err) {
+      addDebugLog(`Upload FAILED: ${err}`);
       alert("Failed to upload file. Please try again.");
       console.error(err);
     } finally {
@@ -287,6 +317,29 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
             </button>
           </div>
         )}
+      </div>
+
+      {/* Floating Debug Log */}
+      <div style={{
+        position: 'fixed',
+        bottom: '20px',
+        right: '20px',
+        width: '350px',
+        height: '250px',
+        background: 'rgba(0,0,0,0.85)',
+        color: '#00ff00',
+        fontFamily: 'monospace',
+        fontSize: '0.8rem',
+        padding: '1rem',
+        borderRadius: '8px',
+        overflowY: 'auto',
+        border: '1px solid #333',
+        zIndex: 9999,
+        boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
+      }}>
+        <h4 style={{ color: 'white', marginTop: 0, marginBottom: '0.5rem', borderBottom: '1px solid #444', paddingBottom: '0.25rem' }}>Engine Diagnostics Log</h4>
+        {logs.map((l, i) => <div key={i} style={{ marginBottom: '4px' }}>{l}</div>)}
+        {logs.length === 0 && <div style={{ color: '#888' }}>Awaiting events...</div>}
       </div>
     </div>
   );
