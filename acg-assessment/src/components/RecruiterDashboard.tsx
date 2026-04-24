@@ -18,6 +18,7 @@ type CandidateResult = {
     timeSpentPerStep?: Record<string, number>;
     totalTimeMs?: number;
   };
+  uploadLinks?: { filename: string, url: string }[];
 };
 
 import { Activity, Clock, Globe } from 'lucide-react';
@@ -344,7 +345,24 @@ export const RecruiterDashboard: React.FC<DashboardProps> = ({ currentUser, onLo
               </div>
             )}
 
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>* S3 attached files (SpeedTest.png, Notes.txt) are successfully parsed into Perplexity context.</p>
+            {viewingCandidate.uploadLinks && viewingCandidate.uploadLinks.length > 0 ? (
+              <div style={{ background: 'var(--bg-color-alt)', padding: '1rem', borderRadius: 'var(--radius-md)', marginBottom: '1.5rem', border: '1px solid var(--glass-border)' }}>
+                <p style={{ margin: '0 0 0.5rem 0', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <FileUp size={18} color="var(--primary-color)" /> Candidate Evidence Uploads
+                </p>
+                <ul style={{ paddingLeft: '1.5rem', margin: 0, fontSize: '0.9rem' }}>
+                  {viewingCandidate.uploadLinks.map((link, idx) => (
+                    <li key={idx} style={{ marginBottom: '0.25rem' }}>
+                      <a href={link.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--primary-color)', textDecoration: 'none' }}>
+                        {link.filename}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>* This candidate did not upload any files.</p>
+            )}
           </div>
         </div>
       )}

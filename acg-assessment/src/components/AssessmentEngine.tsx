@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Send, Clock, AlertTriangle, CheckCircle2, ChevronRight } from 'lucide-react';
 import { submitAssessment } from '../api/submitAssessment';
+import { uploadFile } from '../api/uploadFile';
+import { FileUp, Trash2 } from 'lucide-react';
 import type { CurrentUser } from './Header';
 
 interface AssessmentEngineProps {
@@ -12,8 +14,12 @@ interface AssessmentEngineProps {
 export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownContent, onCandidateStart }) => {
   const [hasStarted, setHasStarted] = useState(false);
   const [candidate, setCandidate] = useState({ name: '', email: '', role: 'Agent' });
+  const [folderName, setFolderName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+
+  const [uploadKeys, setUploadKeys] = useState<string[]>([]);
+  const [uploadingFiles, setUploadingFiles] = useState<boolean>(false);
 
   // States for dynamic tracking
   const [startTime, setStartTime] = useState<Date | null>(null);
@@ -31,6 +37,7 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
     const prefillEmail = params.get('email');
     const prefillName = params.get('name');
     const inviteId = params.get('invite');
+    const folder = params.get('folder');
     
     if (inviteId) {
       const name = prefillName ? decodeURIComponent(prefillName) : '';
@@ -39,6 +46,8 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
         email: prefillEmail ? decodeURIComponent(prefillEmail) : '', 
         role: 'Agent' 
       });
+      if (folder) setFolderName(decodeURIComponent(folder));
+      
       setStartTime(new Date());
       setStepEnterTime(Date.now());
       setHasStarted(true);
@@ -81,6 +90,8 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
     try {
       await submitAssessment({
         candidate,
+        folderName,
+        uploadKeys,
         assessmentStartUtc: startTime.toISOString(),
         completedSteps,
         issueNotes,
@@ -93,6 +104,27 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
       alert("There was an error submitting your assessment. Please try again.");
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    if (!folderName) {
+      alert("Error: Missing Candidate Folder ID. Cannot upload.");
+      return;
+    }
+    
+    const file = e.target.files[0];
+    setUploadingFiles(true);
+    try {
+      const key = await uploadFile(file, folderName);
+      setUploadKeys(prev => [...prev, key]);
+    } catch (err) {
+      alert("Failed to upload file. Please try again.");
+      console.error(err);
+    } finally {
+      setUploadingFiles(false);
+      e.target.value = ''; // reset input
     }
   };
 
@@ -221,6 +253,28 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
               placeholder="I noticed that..."
               style={{ marginBottom: '1.5rem' }}
             ></textarea>
+
+            <div style={{ background: 'var(--bg-color-alt)', padding: '1rem', borderRadius: 'var(--radius-md)', marginBottom: '1.5rem', border: '1px solid var(--border-color)' }}>
+              <p style={{ margin: '0 0 0.5rem 0', fontWeight: 'bold' }}>Attach Evidence (Screenshots, Logs)</p>
+              
+              <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                <label className="btn btn-secondary" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <FileUp size={18} />
+                  {uploadingFiles ? "Uploading..." : "Select File"}
+                  <input type="file" onChange={handleFileUpload} disabled={uploadingFiles} style={{ display: 'none' }} />
+                </label>
+              </div>
+
+              {uploadKeys.length > 0 && (
+                <div style={{ marginTop: '1rem' }}>
+                  <ul style={{ paddingLeft: '1.5rem', margin: 0, fontSize: '0.9rem' }}>
+                    {uploadKeys.map((key, i) => (
+                      <li key={i}>{key.split('/').pop()}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
 
             <button 
               className="btn btn-primary" 

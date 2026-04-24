@@ -30,7 +30,7 @@ export const generateInvite = async (payload: { candidateName: string, candidate
 
     const data = await response.json();
     const host = window.location.origin;
-    const link = `${host}/?invite=${data.inviteId}&name=${encodeURIComponent(payload.candidateName)}&email=${encodeURIComponent(payload.candidateEmail)}`;
+    const link = `${host}/?invite=${data.inviteId}&name=${encodeURIComponent(payload.candidateName)}&email=${encodeURIComponent(payload.candidateEmail)}&folder=${encodeURIComponent(data.folderName)}`;
     
     return { success: true, inviteId: data.inviteId, link };
   } catch (error) {

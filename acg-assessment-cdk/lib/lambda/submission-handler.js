@@ -21,6 +21,15 @@ exports.handler = async (event) => {
         const submittedAtUtc = new Date().toISOString();
         const email = body.candidate.email;
         const uploadKeys = body.uploadKeys || [];
+        const folderName = body.folderName;
+
+        if (!folderName) {
+            return {
+                statusCode: 400,
+                headers: { "Access-Control-Allow-Origin": "*" },
+                body: JSON.stringify({ error: "Missing folderName in submission" })
+            };
+        }
 
         console.log(`Received assessment from ${email}. Uploads bounded: ${uploadKeys.length}`);
 
@@ -31,7 +40,7 @@ exports.handler = async (event) => {
            if (key.match(/\.(jpeg|jpg|png)$/i)) {
                try {
                    const response = await textract.send(new DetectDocumentTextCommand({
-                       Document: { S3Object: { Bucket: process.env.UPLOADS_BUCKET, Name: key } }
+                       Document: { S3Object: { Bucket: process.env.CANDIDATE_RECORDS_BUCKET, Name: key } }
                    }));
                    extractedTextFromUploads += `\n--- OCR of ${key} ---\n`;
                    if (response.Blocks) {
@@ -45,7 +54,7 @@ exports.handler = async (event) => {
            } else if (key.match(/\.(txt|md|csv|json)$/i)) {
                try {
                    const getRes = await s3.send(new GetObjectCommand({
-                       Bucket: process.env.UPLOADS_BUCKET, Key: key
+                       Bucket: process.env.CANDIDATE_RECORDS_BUCKET, Key: key
                    }));
                    const text = await getRes.Body.transformToString();
                    extractedTextFromUploads += `\n--- Content of ${key} ---\n${text}\n`;
@@ -133,11 +142,10 @@ Do not include any markdown formatting like \`\`\`json in your response, just th
             analyticsLog: body.analyticsLog || {}
         };
 
-        const prefixDate = submittedAtUtc.split('T')[0];
-        const recordKey = `submissions/${prefixDate}/${email}_${Date.now()}.json`;
+        const recordKey = `candidates/${folderName}/assessment_results/final_submission.json`;
 
         await s3.send(new PutObjectCommand({
-            Bucket: process.env.DATA_BUCKET,
+            Bucket: process.env.CANDIDATE_RECORDS_BUCKET,
             Key: recordKey,
             Body: JSON.stringify(finalData, null, 2),
             ContentType: "application/json"

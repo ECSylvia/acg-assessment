@@ -8,6 +8,8 @@ import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as ses from 'aws-cdk-lib/aws-ses';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as path from 'path';
 
 export class AcgAssessmentCdkStack extends cdk.Stack {
@@ -45,17 +47,12 @@ export class AcgAssessmentCdkStack extends cdk.Stack {
       description: 'The ARN of the IAM role for GitHub Actions',
     });
 
-    // 1. Data Drop Buckets
-    const dataBucket = new s3.Bucket(this, 'AssessmentData', {
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
-    });
-
-    const uploadsBucket = new s3.Bucket(this, 'AssessmentUploads', {
+    // 1. Unified Candidate Records Bucket
+    const candidateRecordsBucket = new s3.Bucket(this, 'CandidateRecords', {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       cors: [{
-        allowedMethods: [s3.HttpMethods.PUT],
+        allowedMethods: [s3.HttpMethods.PUT, s3.HttpMethods.GET],
         allowedOrigins: ['*'],
         allowedHeaders: ['*'],
       }],
@@ -67,15 +64,13 @@ export class AcgAssessmentCdkStack extends cdk.Stack {
       handler: 'submission-handler.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
       environment: {
-        DATA_BUCKET: dataBucket.bucketName,
-        UPLOADS_BUCKET: uploadsBucket.bucketName,
+        CANDIDATE_RECORDS_BUCKET: candidateRecordsBucket.bucketName,
         PERPLEXITY_API_KEY: process.env.PERPLEXITY_API_KEY || '',
       },
       timeout: cdk.Duration.seconds(60),
     });
 
-    dataBucket.grantWrite(submissionHandler);
-    uploadsBucket.grantReadWrite(submissionHandler);
+    candidateRecordsBucket.grantReadWrite(submissionHandler);
     
     // Explicitly allow AWS Textract for Screenshot OCR evaluations
     submissionHandler.addToRolePolicy(new iam.PolicyStatement({
@@ -95,10 +90,10 @@ export class AcgAssessmentCdkStack extends cdk.Stack {
       handler: 'invite-handler.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
       environment: {
-        DATA_BUCKET: dataBucket.bucketName,
+        CANDIDATE_RECORDS_BUCKET: candidateRecordsBucket.bucketName,
       },
     });
-    dataBucket.grantWrite(inviteHandler);
+    candidateRecordsBucket.grantReadWrite(inviteHandler);
 
     // 2.3 Results Fetcher Pipeline
     const resultsHandler = new lambda.Function(this, 'ResultsHandler', {
@@ -106,11 +101,40 @@ export class AcgAssessmentCdkStack extends cdk.Stack {
       handler: 'results-handler.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
       environment: {
-        DATA_BUCKET: dataBucket.bucketName,
+        CANDIDATE_RECORDS_BUCKET: candidateRecordsBucket.bucketName,
       },
       timeout: cdk.Duration.seconds(30),
     });
-    dataBucket.grantRead(resultsHandler);
+    candidateRecordsBucket.grantRead(resultsHandler);
+
+    // 2.4 Pre-Signed URL Generator for Uploads
+    const presignHandler = new lambda.Function(this, 'PresignHandler', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'presign-handler.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
+      environment: {
+        CANDIDATE_RECORDS_BUCKET: candidateRecordsBucket.bucketName,
+      },
+    });
+    candidateRecordsBucket.grantWrite(presignHandler);
+
+    // 2.5 48-Hour Cleanup Engine
+    const cleanupHandler = new lambda.Function(this, 'CleanupHandler', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'cleanup-handler.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
+      environment: {
+        CANDIDATE_RECORDS_BUCKET: candidateRecordsBucket.bucketName,
+      },
+      timeout: cdk.Duration.seconds(300),
+    });
+    candidateRecordsBucket.grantReadWrite(cleanupHandler);
+
+    // Run the cleanup engine every 1 hour
+    new events.Rule(this, 'CleanupSchedule', {
+      schedule: events.Schedule.rate(cdk.Duration.hours(1)),
+      targets: [new targets.LambdaFunction(cleanupHandler)],
+    });
 
     // 3. Http Gateway Interface
     const api = new apigateway.RestApi(this, 'AssessmentApi', {
@@ -129,6 +153,10 @@ export class AcgAssessmentCdkStack extends cdk.Stack {
 
     const resultsResource = api.root.addResource('results');
     resultsResource.addMethod('GET', new apigateway.LambdaIntegration(resultsHandler));
+
+    const uploadsResource = api.root.addResource('uploads');
+    const presignResource = uploadsResource.addResource('presign');
+    presignResource.addMethod('POST', new apigateway.LambdaIntegration(presignHandler));
 
     // 4. Frontend Web Hosting
     const frontendBucket = new s3.Bucket(this, 'FrontendBucket', {

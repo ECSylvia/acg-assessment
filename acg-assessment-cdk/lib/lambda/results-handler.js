@@ -1,22 +1,24 @@
 const { S3Client, ListObjectsV2Command, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
 const s3 = new S3Client({});
 
 exports.handler = async (event) => {
     try {
+        const bucket = process.env.CANDIDATE_RECORDS_BUCKET;
         const listCommand = new ListObjectsV2Command({
-            Bucket: process.env.DATA_BUCKET,
-            Prefix: 'submissions/'
+            Bucket: bucket,
+            Prefix: 'candidates/'
         });
         const listResponse = await s3.send(listCommand);
 
         const submissions = [];
         if (listResponse.Contents) {
             for (const item of listResponse.Contents) {
-                if (!item.Key.endsWith('.json')) continue;
+                if (!item.Key.endsWith('/assessment_results/final_submission.json')) continue;
                 
                 const getCommand = new GetObjectCommand({
-                    Bucket: process.env.DATA_BUCKET,
+                    Bucket: bucket,
                     Key: item.Key
                 });
                 const getResponse = await s3.send(getCommand);
@@ -25,6 +27,20 @@ exports.handler = async (event) => {
                 try {
                     const data = JSON.parse(bodyStr);
                     
+                    // Generate presigned URLs for all uploads
+                    const uploadLinks = [];
+                    if (data.uploads && Array.isArray(data.uploads)) {
+                        for (const uKey of data.uploads) {
+                            const uCmd = new GetObjectCommand({
+                                Bucket: bucket,
+                                Key: uKey
+                            });
+                            const url = await getSignedUrl(s3, uCmd, { expiresIn: 3600 });
+                            const filename = uKey.split('/').pop();
+                            uploadLinks.push({ filename, url });
+                        }
+                    }
+
                     // Map the S3 data to the structure the frontend expects
                     submissions.push({
                         id: item.Key,
@@ -35,7 +51,8 @@ exports.handler = async (event) => {
                         score: data.perplexityAnalysis?.suggestedScore || data.perpelxityAnalysis?.suggestedScore || "Pending",
                         submitted: data.metadata?.submittedAtUtc || new Date().toISOString(),
                         notes: data.perplexityAnalysis?.note || data.perpelxityAnalysis?.note || data.notes || "",
-                        analytics: data.analyticsLog || null
+                        analytics: data.analyticsLog || null,
+                        uploadLinks: uploadLinks
                     });
                 } catch (parseError) {
                     console.error("Failed to parse submission JSON for key:", item.Key);
