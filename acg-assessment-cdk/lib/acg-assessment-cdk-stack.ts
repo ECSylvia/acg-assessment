@@ -69,8 +69,9 @@ export class AcgAssessmentCdkStack extends cdk.Stack {
       environment: {
         DATA_BUCKET: dataBucket.bucketName,
         UPLOADS_BUCKET: uploadsBucket.bucketName,
+        PERPLEXITY_API_KEY: process.env.PERPLEXITY_API_KEY || '',
       },
-      timeout: cdk.Duration.seconds(30),
+      timeout: cdk.Duration.seconds(60),
     });
 
     dataBucket.grantWrite(submissionHandler);
