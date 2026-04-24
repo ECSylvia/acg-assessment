@@ -12,7 +12,15 @@ type CandidateResult = {
   score: string;
   submitted: string;
   notes: string;
+  analytics?: {
+    ipAddress?: string;
+    userAgent?: string;
+    timeSpentPerStep?: Record<string, number>;
+    totalTimeMs?: number;
+  };
 };
+
+import { Activity, Clock, Globe } from 'lucide-react';
 
 import type { CurrentUser } from './Header';
 
@@ -304,6 +312,37 @@ export const RecruiterDashboard: React.FC<DashboardProps> = ({ currentUser, onLo
                 {viewingCandidate.notes || "No additional flags or notes were provided by the candidate."}
               </p>
             </div>
+
+            {viewingCandidate.analytics && (
+              <div style={{ background: 'var(--bg-color-alt)', padding: '1rem', borderRadius: 'var(--radius-md)', marginBottom: '1.5rem', border: '1px solid var(--glass-border)' }}>
+                <p style={{ margin: '0 0 1rem 0', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <Activity size={18} color="var(--primary-color)" /> Session Analytics
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem', fontSize: '0.9rem' }}>
+                  <div>
+                    <p style={{ margin: '0 0 0.25rem 0', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Clock size={14} /> Total Time</p>
+                    <p style={{ margin: 0, fontWeight: 'bold' }}>{viewingCandidate.analytics.totalTimeMs ? Math.round(viewingCandidate.analytics.totalTimeMs / 1000 / 60) : 0} minutes</p>
+                  </div>
+                  <div>
+                    <p style={{ margin: '0 0 0.25rem 0', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Globe size={14} /> IP Address</p>
+                    <p style={{ margin: 0, fontWeight: 'bold' }}>{viewingCandidate.analytics.ipAddress || 'Unknown'}</p>
+                  </div>
+                </div>
+                {viewingCandidate.analytics.timeSpentPerStep && Object.keys(viewingCandidate.analytics.timeSpentPerStep).length > 0 && (
+                  <div style={{ marginTop: '1rem' }}>
+                    <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.85rem', color: 'var(--text-muted)' }}>Time Breakdown (seconds):</p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                      {Object.entries(viewingCandidate.analytics.timeSpentPerStep).map(([step, time]) => (
+                        <div key={step} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', padding: '0.25rem 0', borderBottom: '1px solid var(--border-color)' }}>
+                          <span style={{ color: 'var(--text-color)' }}>Step {step}</span>
+                          <span style={{ fontWeight: 'bold' }}>{Math.round(time / 1000)}s</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>* S3 attached files (SpeedTest.png, Notes.txt) are successfully parsed into Perplexity context.</p>
           </div>
