@@ -1,0 +1,359 @@
+Here’s a cleaned, single doc you can hand to Del/Antigravity that includes your environment/deployment expectations and CDK preference.
+
+***
+
+# ACG Candidate Technical Assessment  
+## Product & Technical Design (v1)
+
+### 1. Overview
+
+We need a lightweight, hosted assessment that:
+
+- Presents standardized instructions to candidates.  
+- Guides them through tasks executed on their own computer (Wi‑Fi, browser, files, email).  
+- Collects a small amount of structured data (timing, self‑reported issues, brief text answers).  
+- Supports a quick 2–3 minute review using an internal Green/Yellow/Red rubric.
+
+The assessment does **not** store screenshots or actual email contents; those remain in email. The web app is used for instructions and logging only.
+
+Target: Minimal backend, simple AWS hosting, easy to extend.
+
+***
+
+### 2. Environment, Deployment, and Stack
+
+**Environment**
+
+- Single environment initially: **prod only**.
+
+**Region**
+
+- **us-east-1**.
+
+**CI/CD**
+
+- Use **GitHub Actions** (or ACG’s standard CI) to:  
+  - Build the SPA front‑end and deploy static assets to S3.  
+  - Invalidate the CloudFront distribution on main branch changes.  
+  - Deploy AWS infrastructure (S3, CloudFront, API Gateway, Lambda, IAM) via IaC on push to `main`.
+
+**Infrastructure as Code**
+
+- Use **AWS CDK in TypeScript** to define:  
+  - S3 (front‑end hosting, data storage),  
+  - CloudFront,  
+  - API Gateway (HTTP API),  
+  - Lambda (Node.js),  
+  - IAM roles/policies.
+
+This keeps front‑end and infra in one language (TypeScript).
+
+***
+
+### 3. User Journey (Candidate)
+
+1. Candidate receives a link to the assessment (e.g., `https://assessment.audleyconsultinggroup.com`).  
+2. Candidate fills in their name, email, and role, then clicks **Start Assessment**.  
+3. The page walks them through Tasks 1–6 (below), which they perform locally (Wi‑Fi, browser, desktop, email).  
+4. At the end, they submit a short form (self‑reported timing, issues) to our backend.  
+5. Separately, they send the required **emails with attachments** to the designated test mailbox.
+
+***
+
+### 4. Candidate Instructions (Content to Render)
+
+These instructions are presented in the UI as sections. The text below is what should appear to candidates (you can preserve this as close to verbatim as possible).
+
+#### 4.1 Candidate Instructions
+
+**Please complete the following tasks on your own computer and submit via email.**
+
+***
+
+**1. Internet Connectivity Check**
+
+- Connect to your home WiFi.  
+- Run a speed test (any provider is acceptable).  
+- Take a screenshot of the results.  
+
+If your speed test is below **25 Mbps download** or **5 Mbps upload**:
+
+- Include one sentence in your email describing what steps you would take to improve it.
+
+***
+
+**2. Initial Email Submission**
+
+Send an email to the provided test address with:
+
+- A professional subject line.  
+- A professional greeting.  
+- A concise message (3–5 sentences) explaining why you are a good fit.  
+- Attach your speed test screenshot.
+
+**File Naming Requirement:**
+
+Rename the file as:
+
+- `YourLastName-WiFiTest.png`
+
+***
+
+**3. Browser and File Management Task**
+
+- Open at least **3 tabs** in your web browser.  
+- Take a screenshot of your screen showing those tabs.
+
+Then:
+
+- Create a folder on your Desktop named:
+
+  - `ApplicationScreenshots`
+
+- Save your screenshot in that folder using the exact file name:
+
+  - `2026-04-15_[YourLastName]_BrowserScreenshot.png`  
+
+  (Use today’s date in YYYY-MM-DD format. Replace `[YourLastName]` with your actual last name. No spaces.)
+
+***
+
+**4. Documentation Task**
+
+Inside the same folder, create a text file named:
+
+- `Notes_[YourLastName].txt`
+
+In this file, write 2–3 sentences summarizing:
+
+- The steps you completed.  
+- Any issues you encountered (if applicable).
+
+***
+
+**5. Final Email Reply**
+
+Reply to the original test email and:
+
+- Attach the correctly named browser screenshot.  
+- Confirm the file is stored in the correct folder.  
+- Include your **start time and completion time**.
+
+***
+
+**6. Problem-Solving Check**
+
+One or more steps in this exercise may not work exactly the same on every system.
+
+If you encounter any issues:
+
+- Briefly explain what happened.  
+- Describe how you resolved it.
+
+***
+
+**Purpose of This Exercise**
+
+This assessment is designed to evaluate how you approach tasks in a remote work environment, including:
+
+- Attention to detail.  
+- Ability to follow instructions.  
+- Communication clarity.  
+- File organization.  
+- Problem-solving and adaptability.
+
+***
+
+### 5. Scoring Rubric (Internal Only – Not Shown to Candidates)
+
+**Evaluation Time:** 2–3 minutes per candidate.
+
+**🟢 GREEN (Strong Candidate – Move Forward)**
+
+- All instructions followed exactly.  
+- File names are correct.  
+- Folder structure is correct.  
+- Email is clear, concise, and professional.  
+- Completed within expected timeframe.  
+- Notes file is clean and thoughtful.  
+- Any issues were explained clearly with logical resolution.
+
+Signal: Independent, reliable, low oversight required.
+
+**🟡 YELLOW (Borderline – Review Further)**
+
+- Minor errors in naming or structure.  
+- Email is acceptable but not polished.  
+- Slightly unclear communication.  
+- Missed one instruction but completed most correctly.  
+- Weak or vague explanation of issues.
+
+Signal: May require coaching or closer management.
+
+**🔴 RED (Do Not Proceed)**
+
+- Failed to follow multiple instructions.  
+- Incorrect or missing file names.  
+- Did not create required folder or files.  
+- Poor or unprofessional communication.  
+- Did not complete within timeframe.  
+- No explanation for issues or confusion.
+
+Signal: High oversight required, not suited for remote work.
+
+***
+
+### 6. Application Behavior and Data Capture
+
+The web app should:
+
+- Present tasks 1–6 as separate sections.  
+- Track start and end timestamps (client‑side) for the assessment.  
+- Collect minimal structured data to support the rubric, including self‑reported start/end time (for cross‑checking), and problem descriptions.
+
+**Front‑end fields (suggested)**
+
+1. **Landing / identity**
+
+   - `candidate.name` (required).  
+   - `candidate.email` (required).  
+   - `candidate.role` (dropdown: Agent / Coordinator / Other).  
+   - On “Start Assessment”: record `assessmentStartUtc`.
+
+2. **Task 1 – Internet Connectivity**
+
+   - Checkbox: `task1.completed`.  
+   - Optional numeric fields: `task1.downloadMbps`, `task1.uploadMbps`.  
+   - Optional text: `task1.improvementPlan` (if speeds < 25/5).
+
+3. **Task 2 – Initial Email**
+
+   - Checkbox: `task2.sentInitialEmail`.  
+   - Optional text: `task2.subjectLine`.  
+   - Optional boolean: `task2.renamedWifiScreenshot`.
+
+4. **Task 3 – Browser/File Management**
+
+   - Checkbox: `task3.createdFolder`.  
+   - Checkbox: `task3.savedScreenshot`.  
+   - Optional text: `task3.browserUsed`.
+
+5. **Task 4 – Documentation Task**
+
+   - Checkbox: `task4.notesFileCreated`.  
+   - Optional text: `task4.notesSummary`.
+
+6. **Task 5 – Final Email Reply**
+
+   - Checkbox: `task5.sentReply`.  
+   - Text: `task5.startTimeReported` (from candidate).  
+   - Text: `task5.completionTimeReported`.  
+   - Checkbox: `task5.confirmedFolderStructure`.
+
+7. **Task 6 – Problem-Solving**
+
+   - Boolean: `task6.issuesEncountered`.  
+   - Text: `task6.issueDescription`.
+
+On final **Submit**:
+
+- Capture `assessmentEndUtc`.  
+- Compute `assessmentDurationSeconds`.  
+- POST the JSON payload to the backend.
+
+***
+
+### 7. Data Model (Backend)
+
+Each submission is stored as JSON in S3:
+
+`acg-candidate-assessment-data/submissions/YYYY-MM-DD/<email>_<timestamp>.json`
+
+Example structure:
+
+```json
+{
+  "metadata": {
+    "version": "1.0.0",
+    "submittedAtUtc": "2026-04-16T17:35:12Z",
+    "assessmentStartUtc": "2026-04-16T17:10:05Z",
+    "assessmentEndUtc": "2026-04-16T17:35:10Z",
+    "assessmentDurationSeconds": 1505
+  },
+  "candidate": {
+    "name": "Jane Doe",
+    "email": "jane.doe@example.com",
+    "role": "Agent"
+  },
+  "task1": {
+    "completed": true,
+    "downloadMbps": 19.3,
+    "uploadMbps": 3.7,
+    "improvementPlan": "I would restart the modem/router and contact my ISP if needed."
+  },
+  "task2": {
+    "sentInitialEmail": true,
+    "subjectLine": "Technical Support Candidate – Jane Doe",
+    "renamedWifiScreenshot": true
+  },
+  "task3": {
+    "createdFolder": true,
+    "savedScreenshot": true,
+    "browserUsed": "Chrome"
+  },
+  "task4": {
+    "notesFileCreated": true,
+    "notesSummary": "Documented steps and noted small delay attaching the file."
+  },
+  "task5": {
+    "sentReply": true,
+    "startTimeReported": "2026-04-16 13:05",
+    "completionTimeReported": "2026-04-16 13:30",
+    "confirmedFolderStructure": true
+  },
+  "task6": {
+    "issuesEncountered": false,
+    "issueDescription": ""
+  }
+}
+```
+
+No screenshots or email contents are stored here; reviewers use this JSON **plus** the emails in the test mailbox to score.
+
+***
+
+### 8. AWS Implementation Details
+
+**Front‑end**
+
+- **React + Vite + TypeScript SPA**.  
+- Hosted in S3 bucket `acg-candidate-assessment-frontend`.  
+- Public access only via CloudFront Origin Access Control.
+
+**CloudFront**
+
+- Origin: S3 front‑end bucket.  
+- Default root object: `index.html`.  
+- Custom domain and ACM certificate: `assessment.audleyconsultinggroup.com` (us‑east‑1).
+
+**API Gateway**
+
+- HTTP API with one route: `POST /submissions`.  
+- CORS enabled for the front‑end origin.  
+- Basic throttling/rate limiting.
+
+**Lambda (Node.js/TypeScript)**
+
+- Validates required fields (`candidate.email`, `candidate.name`).  
+- Adds `submittedAtUtc` server‑side.  
+- Writes to S3 data bucket under dated prefix.  
+- Environment variable: `DATA_BUCKET`.
+
+**IAM**
+
+- Lambda execution role: `s3:PutObject` only on `DATA_BUCKET/submissions/*`.  
+- CloudFront OAC for front‑end bucket; no public ACLs.
+
+***
+
+This should be ready to paste into a Confluence page or repo README for Del/Antigravity. You don’t need more detail for a first implementation; they can scaffold front‑end + CDK and have something working quickly.
