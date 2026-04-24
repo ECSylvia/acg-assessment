@@ -24,7 +24,7 @@ export class AcgAssessmentCdkStack extends cdk.Stack {
     const githubRole = new iam.Role(this, 'GitHubActionsDeployRole', {
       assumedBy: new iam.OpenIdConnectPrincipal(githubProvider).withConditions({
         StringLike: {
-          'token.actions.githubusercontent.com:sub': 'repo:AudleyConsultingGroup/acg-assessment:*'
+          'token.actions.githubusercontent.com:sub': 'repo:ECSylvia/acg-assessment:*'
         }
       }),
       description: 'Role for GitHub Actions to deploy the CDK stack',
