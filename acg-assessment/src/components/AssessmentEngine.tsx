@@ -1,24 +1,18 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Send, Clock, AlertTriangle, CheckCircle2, ChevronRight } from 'lucide-react';
+import { Send, Clock, AlertTriangle, CheckCircle2, ChevronRight, FileUp, X } from 'lucide-react';
 import { submitAssessment } from '../api/submitAssessment';
 import { uploadFile } from '../api/uploadFile';
-import { FileUp } from 'lucide-react';
 import type { CurrentUser } from './Header';
-
-// Global debug logger array
-const debugLogs: string[] = [];
-const addDebugLog = (msg: string) => {
-  const time = new Date().toLocaleTimeString();
-  debugLogs.push(`[${time}] ${msg}`);
-  // Dispatch custom event to update debug tray
-  window.dispatchEvent(new Event('debug-log'));
-};
 
 interface AssessmentEngineProps {
   markdownContent: string;
   onCandidateStart: (user: CurrentUser) => void;
 }
+
+type StepUpload = { key: string; filename: string };
+
+const SCREENSHOT_TAG = /\[\s*screenshot\s+required\s*\]/i;
 
 export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownContent, onCandidateStart }) => {
   const [hasStarted, setHasStarted] = useState(false);
@@ -27,49 +21,36 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
 
-  const [uploadKeys, setUploadKeys] = useState<string[]>([]);
-  const [uploadingFiles, setUploadingFiles] = useState<boolean>(false);
-  const [logs, setLogs] = useState<string[]>([]);
+  const [stepUploads, setStepUploads] = useState<Record<string, StepUpload[]>>({});
+  const [uploadingFor, setUploadingFor] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
-  React.useEffect(() => {
-    const handleLog = () => setLogs([...debugLogs]);
-    window.addEventListener('debug-log', handleLog);
-    return () => window.removeEventListener('debug-log', handleLog);
-  }, []);
-
-  // States for dynamic tracking
   const [startTime, setStartTime] = useState<Date | null>(null);
   const [completedSteps, setCompletedSteps] = useState<Record<number, boolean>>({});
   const [issueNotes, setIssueNotes] = useState("");
 
-  // Wizard and Analytics State
   const [currentStep, setCurrentStep] = useState(0);
   const [analyticsLog, setAnalyticsLog] = useState<Record<string, number>>({});
   const [stepEnterTime, setStepEnterTime] = useState<number>(0);
 
-  // Pre-fill from Tracking Link and auto-start
   React.useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const prefillEmail = params.get('email');
     const prefillName = params.get('name');
     const inviteId = params.get('invite');
     const folder = params.get('folder');
-    
+
     if (inviteId) {
-      addDebugLog("Detected invite ID from URL: " + inviteId);
       const name = prefillName ? decodeURIComponent(prefillName) : '';
-      setCandidate({ 
-        name: name, 
-        email: prefillEmail ? decodeURIComponent(prefillEmail) : '', 
-        role: 'Agent' 
+      setCandidate({
+        name,
+        email: prefillEmail ? decodeURIComponent(prefillEmail) : '',
+        role: 'Agent'
       });
       if (folder) {
-        addDebugLog("Detected Candidate Folder: " + decodeURIComponent(folder));
         setFolderName(decodeURIComponent(folder));
-      } else {
-        addDebugLog("WARNING: Candidate Folder ID missing from URL");
       }
-      
+
       setStartTime(new Date());
       setStepEnterTime(Date.now());
       setHasStarted(true);
@@ -77,10 +58,16 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
     }
   }, [onCandidateStart]);
 
-  // Split markdown by horizontal rules to get chunks.
   const taskChunks = markdownContent
     .split(/\r?\n\s*(?:\*\*\*|---|___)\s*\r?\n/)
     .filter(chunk => chunk.trim() !== '');
+
+  const stepRequiresScreenshot = (idx: number) => {
+    const chunk = taskChunks[idx];
+    return chunk ? SCREENSHOT_TAG.test(chunk) : false;
+  };
+
+  const stepKey = (idx: number) => `step_${idx}`;
 
   const handleStart = () => {
     if (!candidate.name || !candidate.email) {
@@ -97,8 +84,7 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
     const timeSpent = (Date.now() - stepEnterTime) / 1000;
     const stepName = currentStep === 0 ? 'Intro' : `Task ${currentStep}`;
     setAnalyticsLog(prev => ({ ...prev, [stepName]: (prev[stepName] || 0) + timeSpent }));
-    addDebugLog(`Completed ${stepName} in ${timeSpent.toFixed(1)}s`);
-    
+
     setStepEnterTime(Date.now());
     setCurrentStep(prev => prev + 1);
   };
@@ -106,16 +92,21 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
   const handleSubmit = async () => {
     if (!hasStarted || !startTime) return;
     setIsSubmitting(true);
-    addDebugLog("Starting assessment submission...");
-    
+
     const timeSpent = (Date.now() - stepEnterTime) / 1000;
     const finalLog = { ...analyticsLog, 'Final Review': timeSpent };
-    
+
+    const allUploadKeys = Object.values(stepUploads).flat().map(u => u.key);
+    const stepUploadKeys = Object.fromEntries(
+      Object.entries(stepUploads).map(([k, v]) => [k, v.map(u => u.filename)])
+    );
+
     try {
       await submitAssessment({
         candidate,
         folderName,
-        uploadKeys,
+        uploadKeys: allUploadKeys,
+        stepUploads: stepUploadKeys,
         assessmentStartUtc: startTime.toISOString(),
         completedSteps,
         issueNotes,
@@ -123,43 +114,55 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
         inviteId: new URLSearchParams(window.location.search).get('invite') || null,
         analyticsLog: finalLog
       });
-      addDebugLog("API Submission SUCCESS. Payload processed.");
       setIsSuccess(true);
     } catch (e) {
-      addDebugLog("API Submission FAILED: " + e);
       alert("There was an error submitting your assessment. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleStepFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, stepIdx: number) => {
     if (!e.target.files || e.target.files.length === 0) return;
     if (!folderName) {
-      addDebugLog("ERROR: Cannot upload without folderName");
-      alert("Error: Missing Candidate Folder ID. Cannot upload.");
+      setUploadError("Cannot upload — missing candidate session. Reopen your invite link.");
       return;
     }
-    
+
     const file = e.target.files[0];
-    setUploadingFiles(true);
-    addDebugLog(`Starting upload for ${file.name}...`);
+    setUploadingFor(stepKey(stepIdx));
+    setUploadError(null);
+
     try {
-      const key = await uploadFile(file, folderName);
-      addDebugLog(`Upload SUCCESS. Key: ${key}`);
-      setUploadKeys(prev => [...prev, key]);
+      const key = await uploadFile(file, folderName, stepKey(stepIdx));
+      setStepUploads(prev => ({
+        ...prev,
+        [stepKey(stepIdx)]: [...(prev[stepKey(stepIdx)] || []), { key, filename: file.name }]
+      }));
     } catch (err) {
-      addDebugLog(`Upload FAILED: ${err}`);
-      alert("Failed to upload file. Please try again.");
-      console.error(err);
+      setUploadError(err instanceof Error ? err.message : "Upload failed.");
     } finally {
-      setUploadingFiles(false);
-      e.target.value = ''; // reset input
+      setUploadingFor(null);
+      e.target.value = '';
     }
+  };
+
+  const removeStepUpload = (stepIdx: number, fileKey: string) => {
+    setStepUploads(prev => ({
+      ...prev,
+      [stepKey(stepIdx)]: (prev[stepKey(stepIdx)] || []).filter(u => u.key !== fileKey)
+    }));
   };
 
   const toggleStep = (index: number) => {
     setCompletedSteps(prev => ({ ...prev, [index]: !prev[index] }));
+  };
+
+  const canAdvance = (idx: number) => {
+    if (idx === 0) return true;
+    if (!completedSteps[idx]) return false;
+    if (stepRequiresScreenshot(idx) && (stepUploads[stepKey(idx)] || []).length === 0) return false;
+    return true;
   };
 
   if (isSuccess) {
@@ -167,7 +170,7 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
       <div className="container animate-fade-in" style={{ textAlign: 'center', marginTop: '4rem' }}>
         <CheckCircle2 size={64} color="var(--success-color)" style={{ marginBottom: '1rem' }} />
         <h1>Assessment Submitted Successfully!</h1>
-        <p>Thank you for completing the technical assessment. You may now close this window and please remember to send your final email as requested in the tasks.</p>
+        <p>Thank you for completing the technical assessment. You may now close this window.</p>
       </div>
     );
   }
@@ -177,23 +180,23 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
       <div className="container animate-fade-in">
         <div className="card" style={{ maxWidth: '600px', margin: '4rem auto' }}>
           <h2 style={{ textAlign: 'center', marginBottom: '2rem' }}>Candidate Identification</h2>
-          
+
           <div className="form-group">
             <label className="form-label">Full Name</label>
-            <input 
-              type="text" 
-              className="form-control" 
+            <input
+              type="text"
+              className="form-control"
               value={candidate.name}
               onChange={e => setCandidate({ ...candidate, name: e.target.value })}
               placeholder="Jane Doe"
             />
           </div>
-          
+
           <div className="form-group">
             <label className="form-label">Email Address</label>
-            <input 
-              type="email" 
-              className="form-control" 
+            <input
+              type="email"
+              className="form-control"
               value={candidate.email}
               onChange={e => setCandidate({ ...candidate, email: e.target.value })}
               placeholder="jane.doe@example.com"
@@ -202,7 +205,7 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
 
           <div className="form-group">
             <label className="form-label">Role</label>
-            <select 
+            <select
               className="form-control"
               value={candidate.role}
               onChange={e => setCandidate({ ...candidate, role: e.target.value })}
@@ -213,8 +216,8 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
             </select>
           </div>
 
-          <button 
-            className="btn btn-primary" 
+          <button
+            className="btn btn-primary"
             style={{ width: '100%', marginTop: '1rem' }}
             onClick={handleStart}
           >
@@ -224,6 +227,9 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
       </div>
     );
   }
+
+  const currentUploads = stepUploads[stepKey(currentStep)] || [];
+  const requiresScreenshot = stepRequiresScreenshot(currentStep);
 
   return (
     <div className="container animate-fade-in">
@@ -243,40 +249,94 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
             <div className="markdown-body">
               <ReactMarkdown>{taskChunks[currentStep]}</ReactMarkdown>
             </div>
-            
+
             {currentStep > 0 && (
               <div style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border-color)' }}>
                 <label className="checkbox-container">
-                  <input 
-                    type="checkbox" 
-                    checked={!!completedSteps[currentStep]} 
-                    onChange={() => toggleStep(currentStep)} 
+                  <input
+                    type="checkbox"
+                    checked={!!completedSteps[currentStep]}
+                    onChange={() => toggleStep(currentStep)}
                   />
                   <span className="checkmark"></span>
                   <span style={{ fontWeight: 500 }}>I have completed this task.</span>
                 </label>
+
+                {requiresScreenshot && (
+                  <div style={{ background: 'var(--bg-color-alt)', padding: '1rem', borderRadius: 'var(--radius-md)', marginTop: '1rem', border: '1px solid var(--border-color)' }}>
+                    <p style={{ margin: '0 0 0.5rem 0', fontWeight: 'bold' }}>
+                      Screenshot required for this step
+                    </p>
+                    <p style={{ margin: '0 0 0.75rem 0', fontSize: '0.85rem' }}>
+                      Attach a screenshot or supporting file showing the result of this step. You will not be able to advance until at least one file is attached.
+                    </p>
+
+                    <label className="btn btn-secondary" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <FileUp size={18} />
+                      {uploadingFor === stepKey(currentStep) ? "Uploading..." : "Attach screenshot"}
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/gif,application/pdf,.txt,.md,.csv,.json,.log"
+                        onChange={(e) => handleStepFileUpload(e, currentStep)}
+                        disabled={uploadingFor === stepKey(currentStep)}
+                        style={{ display: 'none' }}
+                      />
+                    </label>
+
+                    {uploadError && (
+                      <p style={{ marginTop: '0.5rem', color: 'var(--error-color)', fontSize: '0.85rem' }}>
+                        {uploadError}
+                      </p>
+                    )}
+
+                    {currentUploads.length > 0 && (
+                      <ul style={{ paddingLeft: '1.25rem', margin: '0.75rem 0 0 0', fontSize: '0.9rem' }}>
+                        {currentUploads.map(u => (
+                          <li key={u.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+                            <span>{u.filename}</span>
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              style={{ padding: '0.2rem 0.5rem', fontSize: '0.8rem' }}
+                              onClick={() => removeStepUpload(currentStep, u.key)}
+                            >
+                              <X size={14} />
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
-            <button 
-              className="btn btn-primary" 
+            <button
+              className="btn btn-primary"
               onClick={handleNextStep}
-              disabled={currentStep > 0 && !completedSteps[currentStep]}
+              disabled={!canAdvance(currentStep)}
               style={{ marginTop: '2rem', width: '100%', display: 'flex', justifyContent: 'center', gap: '0.5rem' }}
             >
               Next Step <ChevronRight size={20} />
             </button>
+            {!canAdvance(currentStep) && currentStep > 0 && (
+              <p style={{ marginTop: '0.75rem', fontSize: '0.85rem', color: 'var(--text-muted)', textAlign: 'center' }}>
+                {!completedSteps[currentStep]
+                  ? 'Mark this task complete to continue.'
+                  : 'Attach the required screenshot to continue.'}
+              </p>
+            )}
           </div>
         ) : (
           <div className="card animate-fade-in" style={{ marginBottom: '4rem', borderColor: 'var(--accent-color)' }}>
-            <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'white' }}>
+            <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <AlertTriangle size={24} color="var(--accent-color)" />
               Final Review & Submit
             </h3>
             <p>If you encountered any issues while performing these tasks, please describe them lightly below.</p>
-            
-            <textarea 
-              className="form-control" 
+
+            <textarea
+              className="form-control"
               rows={4}
               value={issueNotes}
               onChange={e => setIssueNotes(e.target.value)}
@@ -285,30 +345,23 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
             ></textarea>
 
             <div style={{ background: 'var(--bg-color-alt)', padding: '1rem', borderRadius: 'var(--radius-md)', marginBottom: '1.5rem', border: '1px solid var(--border-color)' }}>
-              <p style={{ margin: '0 0 0.5rem 0', fontWeight: 'bold' }}>Attach Evidence (Screenshots, Logs)</p>
-              
-              <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                <label className="btn btn-secondary" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <FileUp size={18} />
-                  {uploadingFiles ? "Uploading..." : "Select File"}
-                  <input type="file" onChange={handleFileUpload} disabled={uploadingFiles} style={{ display: 'none' }} />
-                </label>
-              </div>
-
-              {uploadKeys.length > 0 && (
-                <div style={{ marginTop: '1rem' }}>
-                  <ul style={{ paddingLeft: '1.5rem', margin: 0, fontSize: '0.9rem' }}>
-                    {uploadKeys.map((key, i) => (
-                      <li key={i}>{key.split('/').pop()}</li>
-                    ))}
-                  </ul>
-                </div>
+              <p style={{ margin: '0 0 0.5rem 0', fontWeight: 'bold' }}>Evidence summary</p>
+              {Object.keys(stepUploads).length === 0 ? (
+                <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--text-muted)' }}>No screenshots uploaded.</p>
+              ) : (
+                <ul style={{ paddingLeft: '1.25rem', margin: 0, fontSize: '0.9rem' }}>
+                  {Object.entries(stepUploads).map(([k, files]) => (
+                    <li key={k}>
+                      <strong>{k}</strong>: {files.map(f => f.filename).join(', ')}
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
 
-            <button 
-              className="btn btn-primary" 
-              onClick={handleSubmit} 
+            <button
+              className="btn btn-primary"
+              onClick={handleSubmit}
               disabled={isSubmitting}
               style={{ fontSize: '1.1rem', padding: '1rem 2rem', width: '100%', display: 'flex', justifyContent: 'center', gap: '0.5rem' }}
             >
@@ -317,29 +370,6 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
             </button>
           </div>
         )}
-      </div>
-
-      {/* Floating Debug Log */}
-      <div style={{
-        position: 'fixed',
-        bottom: '20px',
-        right: '20px',
-        width: '350px',
-        height: '250px',
-        background: 'rgba(0,0,0,0.85)',
-        color: '#00ff00',
-        fontFamily: 'monospace',
-        fontSize: '0.8rem',
-        padding: '1rem',
-        borderRadius: '8px',
-        overflowY: 'auto',
-        border: '1px solid #333',
-        zIndex: 9999,
-        boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
-      }}>
-        <h4 style={{ color: 'white', marginTop: 0, marginBottom: '0.5rem', borderBottom: '1px solid #444', paddingBottom: '0.25rem' }}>Engine Diagnostics Log</h4>
-        {logs.map((l, i) => <div key={i} style={{ marginBottom: '4px' }}>{l}</div>)}
-        {logs.length === 0 && <div style={{ color: '#888' }}>Awaiting events...</div>}
       </div>
     </div>
   );

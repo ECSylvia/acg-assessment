@@ -57,12 +57,12 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAbout, user, onLogout }) =
                 position: 'absolute',
                 top: '110%',
                 right: 0,
-                background: 'var(--bg-color)',
+                background: 'var(--surface-color)',
                 border: '1px solid var(--border-color)',
                 borderRadius: 'var(--radius-md)',
                 minWidth: '200px',
                 zIndex: 100,
-                boxShadow: '0 10px 25px rgba(0,0,0,0.5)',
+                boxShadow: 'var(--shadow-lg)',
                 overflow: 'hidden'
               }}>
                 <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-color-alt)' }}>
@@ -76,9 +76,9 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAbout, user, onLogout }) =
                   </button>
                 )}
                 
-                <button 
-                  className="dropdown-item" 
-                  style={{ ...dropdownItemStyle, color: 'var(--error-color)' }}
+                <button
+                  className="dropdown-item"
+                  style={{ ...dropdownItemStyle, color: 'var(--accent-color)' }}
                   onClick={() => {
                     setDropdownOpen(false);
                     onLogout();

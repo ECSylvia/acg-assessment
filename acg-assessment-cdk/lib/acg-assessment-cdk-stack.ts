@@ -7,7 +7,6 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
-import * as ses from 'aws-cdk-lib/aws-ses';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as path from 'path';
@@ -15,6 +14,25 @@ import * as path from 'path';
 export class AcgAssessmentCdkStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
+
+    // CDK context / env-driven configuration. These are configured at deploy time.
+    // ALLOWED_ORIGIN: explicit CORS origin for production (CloudFront URL or custom domain).
+    //   Falls back to '*' to keep dev deploys working but should be set in production.
+    const allowedOrigin = (this.node.tryGetContext('allowedOrigin') as string)
+      || process.env.ALLOWED_ORIGIN
+      || '*';
+    // ADMIN_API_TOKEN: required bearer token for admin/recruiter endpoints. If empty,
+    // endpoints fall back to no-auth (transitional only) — set this in production.
+    const adminApiToken = (this.node.tryGetContext('adminApiToken') as string)
+      || process.env.ADMIN_API_TOKEN
+      || '';
+
+    const sharedLambdaEnv: Record<string, string> = {
+      ALLOWED_ORIGIN: allowedOrigin,
+    };
+    if (adminApiToken) {
+      sharedLambdaEnv.ADMIN_API_TOKEN = adminApiToken;
+    }
 
     // Create OIDC Provider for GitHub Actions
     const githubProvider = new iam.OpenIdConnectProvider(this, 'GithubOidcProvider', {
@@ -41,7 +59,6 @@ export class AcgAssessmentCdkStack extends cdk.Stack {
     // Grant full administrator access so CDK can deploy everything (Use with caution in production)
     githubRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AdministratorAccess'));
 
-    // Output the Role ARN so we can use it in our GitHub workflow
     new cdk.CfnOutput(this, 'GitHubDeployRoleArn', {
       value: githubRole.roleArn,
       description: 'The ARN of the IAM role for GitHub Actions',
@@ -53,9 +70,11 @@ export class AcgAssessmentCdkStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       cors: [{
         allowedMethods: [s3.HttpMethods.PUT, s3.HttpMethods.GET],
-        allowedOrigins: ['*'],
+        // Tighten S3 CORS to the configured origin (falls back to * during initial bring-up).
+        allowedOrigins: allowedOrigin === '*' ? ['*'] : [allowedOrigin],
         allowedHeaders: ['*'],
       }],
+      enforceSSL: true,
     });
 
     // 2. Submission Processing Pipeline
@@ -64,30 +83,26 @@ export class AcgAssessmentCdkStack extends cdk.Stack {
       handler: 'submission-handler.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
       environment: {
+        ...sharedLambdaEnv,
         CANDIDATE_RECORDS_BUCKET: candidateRecordsBucket.bucketName,
       },
       timeout: cdk.Duration.seconds(60),
+      reservedConcurrentExecutions: 20,
     });
 
     candidateRecordsBucket.grantReadWrite(submissionHandler);
-    
-    // Explicitly allow AWS Textract for Screenshot OCR evaluations
+
     submissionHandler.addToRolePolicy(new iam.PolicyStatement({
       actions: ['textract:DetectDocumentText', 'textract:AnalyzeDocument'],
       resources: ['*'],
     }));
 
-    // Explicitly allow Amazon Bedrock for AI evaluations
     submissionHandler.addToRolePolicy(new iam.PolicyStatement({
       actions: ['bedrock:InvokeModel'],
       resources: ['arn:aws:bedrock:*::foundation-model/anthropic.claude-3-5-haiku-20241022-v1:0'],
     }));
 
-    // Grant SES SendEmail permission
-    submissionHandler.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['ses:SendEmail', 'ses:SendRawEmail'],
-      resources: ['*'],
-    }));
+    // SES email path removed — admin notifications now go to the in-app activity log.
 
     // 2.2 Invite Generator Pipeline
     const inviteHandler = new lambda.Function(this, 'InviteHandler', {
@@ -95,8 +110,10 @@ export class AcgAssessmentCdkStack extends cdk.Stack {
       handler: 'invite-handler.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
       environment: {
+        ...sharedLambdaEnv,
         CANDIDATE_RECORDS_BUCKET: candidateRecordsBucket.bucketName,
       },
+      reservedConcurrentExecutions: 10,
     });
     candidateRecordsBucket.grantReadWrite(inviteHandler);
 
@@ -106,9 +123,11 @@ export class AcgAssessmentCdkStack extends cdk.Stack {
       handler: 'results-handler.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
       environment: {
+        ...sharedLambdaEnv,
         CANDIDATE_RECORDS_BUCKET: candidateRecordsBucket.bucketName,
       },
       timeout: cdk.Duration.seconds(30),
+      reservedConcurrentExecutions: 10,
     });
     candidateRecordsBucket.grantRead(resultsHandler);
 
@@ -118,10 +137,12 @@ export class AcgAssessmentCdkStack extends cdk.Stack {
       handler: 'presign-handler.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
       environment: {
+        ...sharedLambdaEnv,
         CANDIDATE_RECORDS_BUCKET: candidateRecordsBucket.bucketName,
       },
+      reservedConcurrentExecutions: 30,
     });
-    candidateRecordsBucket.grantWrite(presignHandler);
+    candidateRecordsBucket.grantReadWrite(presignHandler);
 
     // 2.5 48-Hour Cleanup Engine
     const cleanupHandler = new lambda.Function(this, 'CleanupHandler', {
@@ -129,24 +150,58 @@ export class AcgAssessmentCdkStack extends cdk.Stack {
       handler: 'cleanup-handler.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
       environment: {
+        ...sharedLambdaEnv,
         CANDIDATE_RECORDS_BUCKET: candidateRecordsBucket.bucketName,
       },
       timeout: cdk.Duration.seconds(300),
     });
     candidateRecordsBucket.grantReadWrite(cleanupHandler);
 
-    // Run the cleanup engine every 1 hour
     new events.Rule(this, 'CleanupSchedule', {
       schedule: events.Schedule.rate(cdk.Duration.hours(1)),
       targets: [new targets.LambdaFunction(cleanupHandler)],
     });
 
+    // 2.6 Admin activity log handler (replaces SES email log)
+    const activityLogHandler = new lambda.Function(this, 'ActivityLogHandler', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'activity-log-handler.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
+      environment: {
+        ...sharedLambdaEnv,
+        CANDIDATE_RECORDS_BUCKET: candidateRecordsBucket.bucketName,
+      },
+      timeout: cdk.Duration.seconds(30),
+      reservedConcurrentExecutions: 5,
+    });
+    candidateRecordsBucket.grantReadWrite(activityLogHandler);
+
+    // 2.7 Recruiter / user registry handler
+    const usersHandler = new lambda.Function(this, 'UsersHandler', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'users-handler.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
+      environment: {
+        ...sharedLambdaEnv,
+        CANDIDATE_RECORDS_BUCKET: candidateRecordsBucket.bucketName,
+      },
+      timeout: cdk.Duration.seconds(15),
+      reservedConcurrentExecutions: 5,
+    });
+    candidateRecordsBucket.grantReadWrite(usersHandler);
+
     // 3. Http Gateway Interface
     const api = new apigateway.RestApi(this, 'AssessmentApi', {
       restApiName: 'Assessment Service',
       defaultCorsPreflightOptions: {
-        allowOrigins: apigateway.Cors.ALL_ORIGINS,
+        allowOrigins: allowedOrigin === '*' ? apigateway.Cors.ALL_ORIGINS : [allowedOrigin],
         allowMethods: apigateway.Cors.ALL_METHODS,
+        allowHeaders: ['Content-Type', 'Authorization', 'X-Actor'],
+      },
+      // Stage-level throttling to mitigate abuse/DoS on public endpoints.
+      deployOptions: {
+        throttlingBurstLimit: 50,
+        throttlingRateLimit: 25,
       },
     });
 
@@ -163,11 +218,22 @@ export class AcgAssessmentCdkStack extends cdk.Stack {
     const presignResource = uploadsResource.addResource('presign');
     presignResource.addMethod('POST', new apigateway.LambdaIntegration(presignHandler));
 
+    const activityLogResource = api.root.addResource('activity-log');
+    activityLogResource.addMethod('GET', new apigateway.LambdaIntegration(activityLogHandler));
+    activityLogResource.addMethod('POST', new apigateway.LambdaIntegration(activityLogHandler));
+
+    const usersResource = api.root.addResource('users');
+    usersResource.addMethod('GET', new apigateway.LambdaIntegration(usersHandler));
+    usersResource.addMethod('POST', new apigateway.LambdaIntegration(usersHandler));
+    const userByIdResource = usersResource.addResource('{id}');
+    userByIdResource.addMethod('DELETE', new apigateway.LambdaIntegration(usersHandler));
+
     // 4. Frontend Web Hosting
     const frontendBucket = new s3.Bucket(this, 'FrontendBucket', {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
+      enforceSSL: true,
     });
 
     const distribution = new cloudfront.Distribution(this, 'FrontendDistribution', {

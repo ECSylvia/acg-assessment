@@ -4,6 +4,7 @@ import { AboutScreen } from './components/AboutScreen';
 import { MarkdownUploader } from './components/MarkdownUploader';
 import { AssessmentEngine } from './components/AssessmentEngine';
 import { RecruiterDashboard } from './components/RecruiterDashboard';
+import { setAdminToken } from './api/adminClient';
 
 function App() {
   const [isAboutOpen, setIsAboutOpen] = useState(false);
@@ -16,8 +17,7 @@ function App() {
     if (params.get('admin') === 'true') {
       setIsAdmin(true);
     }
-    
-    // Auto-skip the load screen for candidates hitting the invite link
+
     if (params.get('invite')) {
       fetch('/initial_assessment.md')
         .then(res => res.text())
@@ -27,6 +27,7 @@ function App() {
   }, []);
 
   const handleLogout = () => {
+    setAdminToken('');
     setCurrentUser(null);
     if (!isAdmin) {
       window.location.reload();
@@ -35,29 +36,29 @@ function App() {
 
   return (
     <>
-      <Header 
-        onOpenAbout={() => setIsAboutOpen(true)} 
+      <Header
+        onOpenAbout={() => setIsAboutOpen(true)}
         user={currentUser}
         onLogout={handleLogout}
       />
-      
-      <AboutScreen 
-        isOpen={isAboutOpen} 
-        onClose={() => setIsAboutOpen(false)} 
+
+      <AboutScreen
+        isOpen={isAboutOpen}
+        onClose={() => setIsAboutOpen(false)}
       />
 
       <main>
         {isAdmin ? (
-          <RecruiterDashboard 
-            currentUser={currentUser} 
-            onLogin={(user) => setCurrentUser(user)} 
+          <RecruiterDashboard
+            currentUser={currentUser}
+            onLogin={(user) => setCurrentUser(user)}
           />
         ) : !assessmentConfig ? (
           <MarkdownUploader onUpload={setAssessmentConfig} />
         ) : (
-          <AssessmentEngine 
-            markdownContent={assessmentConfig} 
-            onCandidateStart={(user) => setCurrentUser(user)} 
+          <AssessmentEngine
+            markdownContent={assessmentConfig}
+            onCandidateStart={(user) => setCurrentUser(user)}
           />
         )}
       </main>

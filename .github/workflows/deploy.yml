@@ -36,7 +36,7 @@ jobs:
         working-directory: ./acg-assessment
         run: npm run build
         env:
-          VITE_API_URL: https://hw7u5aips6.execute-api.us-east-1.amazonaws.com/prod/
+          VITE_API_URL: ${{ secrets.VITE_API_URL || 'https://hw7u5aips6.execute-api.us-east-1.amazonaws.com/prod/' }}
 
       - name: Install CDK Dependencies
         working-directory: ./acg-assessment-cdk
@@ -44,4 +44,12 @@ jobs:
 
       - name: CDK Deploy
         working-directory: ./acg-assessment-cdk
+        env:
+          # ALLOWED_ORIGIN should be set to the production CloudFront/custom domain to
+          # tighten API & S3 CORS. Falls back to '*' when not provided (dev-only).
+          ALLOWED_ORIGIN: ${{ secrets.ALLOWED_ORIGIN }}
+          # ADMIN_API_TOKEN must be set as a repo secret for the admin/recruiter routes
+          # to require Authorization. If empty the lambdas allow all callers — set this
+          # before exposing the deployment publicly.
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
         run: npx cdk deploy --require-approval never
