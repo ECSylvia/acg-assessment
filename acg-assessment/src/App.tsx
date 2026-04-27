@@ -13,17 +13,38 @@ function App() {
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('admin') === 'true') {
-      setIsAdmin(true);
-    }
+    const detectAdminRoute = () => {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('admin') === 'true') return true;
 
+      const adminPaths = ['/admin', '/recruiter', '/dashboard'];
+      const pathname = window.location.pathname.replace(/\/+$/, '').toLowerCase();
+      if (adminPaths.includes(pathname)) return true;
+
+      const hash = window.location.hash.replace(/^#/, '').replace(/\/+$/, '').toLowerCase();
+      if (adminPaths.includes(hash)) return true;
+
+      return false;
+    };
+
+    const updateAdminFromLocation = () => setIsAdmin(detectAdminRoute());
+    updateAdminFromLocation();
+
+    window.addEventListener('hashchange', updateAdminFromLocation);
+    window.addEventListener('popstate', updateAdminFromLocation);
+
+    const params = new URLSearchParams(window.location.search);
     if (params.get('invite')) {
       fetch('/initial_assessment.md')
         .then(res => res.text())
         .then(text => setAssessmentConfig(text))
         .catch(console.error);
     }
+
+    return () => {
+      window.removeEventListener('hashchange', updateAdminFromLocation);
+      window.removeEventListener('popstate', updateAdminFromLocation);
+    };
   }, []);
 
   const handleLogout = () => {
@@ -40,6 +61,7 @@ function App() {
         onOpenAbout={() => setIsAboutOpen(true)}
         user={currentUser}
         onLogout={handleLogout}
+        showAdminLink={!assessmentConfig && !isAdmin}
       />
 
       <AboutScreen

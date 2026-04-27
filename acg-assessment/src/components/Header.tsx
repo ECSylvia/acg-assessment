@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Info, User, Settings, LogOut, ChevronDown } from 'lucide-react';
+import { Info, User, Settings, LogOut, ChevronDown, Lock } from 'lucide-react';
 
 export type CurrentUser = {
   name: string;
@@ -11,9 +11,10 @@ interface HeaderProps {
   onOpenAbout: () => void;
   user: CurrentUser | null;
   onLogout: () => void;
+  showAdminLink?: boolean;
 }
 
-export const Header: React.FC<HeaderProps> = ({ onOpenAbout, user, onLogout }) => {
+export const Header: React.FC<HeaderProps> = ({ onOpenAbout, user, onLogout, showAdminLink = true }) => {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -39,6 +40,28 @@ export const Header: React.FC<HeaderProps> = ({ onOpenAbout, user, onLogout }) =
           <Info size={18} />
           <span style={{ fontSize: '0.9rem' }}>About</span>
         </button>
+
+        {showAdminLink && !user && (
+          <a
+            href="/admin"
+            title="Recruiter / Admin Login"
+            aria-label="Recruiter / Admin Login"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '0.4rem',
+              opacity: 0.45,
+              color: 'var(--text-muted, #888)',
+              textDecoration: 'none',
+              borderRadius: 'var(--radius-sm, 4px)',
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.opacity = '1'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.opacity = '0.45'; }}
+          >
+            <Lock size={14} />
+          </a>
+        )}
 
         {user && (
           <div style={{ position: 'relative' }} ref={dropdownRef}>
