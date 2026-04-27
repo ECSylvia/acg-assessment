@@ -99,7 +99,15 @@ export class AcgAssessmentCdkStack extends cdk.Stack {
 
     submissionHandler.addToRolePolicy(new iam.PolicyStatement({
       actions: ['bedrock:InvokeModel'],
-      resources: ['arn:aws:bedrock:*::foundation-model/anthropic.claude-3-5-haiku-20241022-v1:0'],
+      // Cross-region inference profiles route to multiple regional foundation
+      // models, so we authorize both the inference-profile ARN and the
+      // foundation-model ARNs it can fan out to. Without the inference profile
+      // permission, Claude 3.5 Haiku invocations fail with AccessDenied even
+      // though a fallback is attempted at the foundation model ID.
+      resources: [
+        'arn:aws:bedrock:*::foundation-model/anthropic.claude-3-5-haiku-20241022-v1:0',
+        'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-3-5-haiku-20241022-v1:0',
+      ],
     }));
 
     // SES email path removed — admin notifications now go to the in-app activity log.

@@ -68,15 +68,18 @@ exports.handler = async (event) => {
                         }
                     }
 
+                    const ai = data.aiAnalysis || data.perplexityAnalysis || {};
                     submissions.push({
                         id: item.Key,
                         name: data.candidate?.name || "Unknown Candidate",
                         email: data.candidate?.email || "No Email",
                         role: data.candidate?.role || "Candidate",
                         status: "Completed",
-                        score: data.aiAnalysis?.suggestedScore || data.perplexityAnalysis?.suggestedScore || "Pending",
+                        score: ai.suggestedScore || "Pending",
                         submitted: data.metadata?.submittedAtUtc || new Date().toISOString(),
-                        notes: data.aiAnalysis?.note || data.perplexityAnalysis?.note || data.notes || "",
+                        notes: ai.note || data.notes || "",
+                        aiStatus: ai.status || null,
+                        aiErrorClass: ai.errorClass || null,
                         analytics: data.analyticsLog || null,
                         uploadLinks: uploadLinks,
                         stepUploads: data.stepUploads || {}

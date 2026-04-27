@@ -77,7 +77,10 @@ exports.handler = async (event) => {
         let aiEvaluation = {
             status: "evaluating",
             note: "AI analysis pipeline skipped. AWS Bedrock failure.",
-            suggestedScore: "Pending"
+            suggestedScore: "Pending",
+            errorClass: null,
+            errorDetail: null,
+            modelId: null
         };
 
         const prompt = `
@@ -104,9 +107,41 @@ You must output a JSON object exactly like this:
 Do not include any markdown formatting like \`\`\`json in your response, just the raw JSON object.
 `;
 
-        try {
+        // Claude 3.5 Haiku in us-east-1 must be invoked through the cross-region
+        // inference profile. Direct foundation-model invocation returns
+        // ValidationException ("on-demand throughput isn't supported"). Allow
+        // override via env in case the account is configured differently.
+        const primaryModelId = process.env.BEDROCK_MODEL_ID
+            || "us.anthropic.claude-3-5-haiku-20241022-v1:0";
+        const fallbackModelId = "anthropic.claude-3-5-haiku-20241022-v1:0";
+
+        const classifyBedrockError = (err) => {
+            const name = err && (err.name || err.Code || err.code) || "";
+            const msg = (err && (err.message || String(err))) || "";
+            if (/AccessDenied/i.test(name) || /not authorized/i.test(msg) || /access.*denied/i.test(msg)) {
+                return "AccessDeniedException";
+            }
+            if (/ResourceNotFound/i.test(name) || /not found/i.test(msg)) {
+                return "ResourceNotFoundException";
+            }
+            if (/Validation/i.test(name) || /on-demand throughput/i.test(msg) || /inference profile/i.test(msg)) {
+                return "ValidationException";
+            }
+            if (/Throttling/i.test(name) || /TooManyRequests/i.test(name) || /rate exceed/i.test(msg)) {
+                return "ThrottlingException";
+            }
+            if (/Timeout/i.test(name) || /timed? ?out/i.test(msg) || /ETIMEDOUT/i.test(msg)) {
+                return "TimeoutException";
+            }
+            if (/ModelError/i.test(name) || /Model.*not.*ready/i.test(msg)) {
+                return "ModelError";
+            }
+            return name || "UnknownError";
+        };
+
+        const tryInvoke = async (modelId) => {
             const command = new InvokeModelCommand({
-                modelId: "anthropic.claude-3-5-haiku-20241022-v1:0",
+                modelId,
                 contentType: "application/json",
                 accept: "application/json",
                 body: JSON.stringify({
@@ -114,26 +149,128 @@ Do not include any markdown formatting like \`\`\`json in your response, just th
                     max_tokens: 1000,
                     system: "You are a JSON-only API. You output raw valid JSON without markdown wrapping.",
                     messages: [
-                        { role: "user", content: prompt }
+                        { role: "user", content: [{ type: "text", text: prompt }] }
                     ]
                 })
             });
-
             const response = await bedrock.send(command);
-            const rawRes = new TextDecoder().decode(response.body);
-            const data = JSON.parse(rawRes);
+            // response.body is a Uint8Array in Node 20 SDK v3
+            let rawRes;
+            if (response.body && typeof response.body.transformToString === 'function') {
+                rawRes = await response.body.transformToString();
+            } else {
+                rawRes = new TextDecoder().decode(response.body);
+            }
+            return rawRes;
+        };
 
-            let content = data.content[0].text;
-            content = content.replace(/```json/g, '').replace(/```/g, '').trim();
-            const parsed = JSON.parse(content);
-            aiEvaluation = {
-                status: "completed",
-                note: parsed.note || "Evaluated by Amazon Bedrock (Claude 3.5 Haiku).",
-                suggestedScore: parsed.suggestedScore || "Yellow"
+        const parseModelResponse = (rawRes) => {
+            const data = JSON.parse(rawRes);
+            // Bedrock Messages API: { content: [{ type: 'text', text: '...' }], ... }
+            let text = "";
+            if (Array.isArray(data.content)) {
+                text = data.content
+                    .filter(c => c && (c.type === 'text' || typeof c.text === 'string'))
+                    .map(c => c.text || '')
+                    .join('\n')
+                    .trim();
+            } else if (typeof data.completion === 'string') {
+                // Legacy Anthropic Text Completions shape
+                text = data.completion.trim();
+            } else if (typeof data.output_text === 'string') {
+                text = data.output_text.trim();
+            }
+            if (!text) {
+                throw new Error('Bedrock response had no text content');
+            }
+            // Strip code fences and any leading/trailing prose
+            let cleaned = text.replace(/```(?:json)?/gi, '').trim();
+            // Extract first {...} JSON object if model added prose around it
+            const objMatch = cleaned.match(/\{[\s\S]*\}/);
+            if (objMatch) cleaned = objMatch[0];
+            const parsed = JSON.parse(cleaned);
+            const score = String(parsed.suggestedScore || 'Yellow').trim();
+            const normalized = /^green$/i.test(score) ? 'Green'
+                : /^red$/i.test(score) ? 'Red'
+                : 'Yellow';
+            return {
+                suggestedScore: normalized,
+                note: parsed.note || "Evaluated by Amazon Bedrock (Claude 3.5 Haiku)."
             };
-        } catch (err) {
-            console.error("Failed to call Amazon Bedrock", err);
-            aiEvaluation.note = "Failed to reach Amazon Bedrock API or parse response.";
+        };
+
+        const modelsToTry = [primaryModelId];
+        if (primaryModelId !== fallbackModelId) modelsToTry.push(fallbackModelId);
+
+        let lastError = null;
+        for (const modelId of modelsToTry) {
+            try {
+                console.log(`Invoking Bedrock model: ${modelId}`);
+                const rawRes = await tryInvoke(modelId);
+                try {
+                    const parsed = parseModelResponse(rawRes);
+                    aiEvaluation = {
+                        status: "completed",
+                        note: parsed.note,
+                        suggestedScore: parsed.suggestedScore,
+                        errorClass: null,
+                        errorDetail: null,
+                        modelId
+                    };
+                    lastError = null;
+                    break;
+                } catch (parseErr) {
+                    console.error(`Bedrock response parse failed for ${modelId}: ${parseErr.message}`);
+                    console.error(`Raw response (truncated 1KB): ${String(rawRes).slice(0, 1024)}`);
+                    aiEvaluation = {
+                        status: "parse_failed",
+                        note: "Bedrock returned a response but it could not be parsed. A reviewer will assign a score manually.",
+                        suggestedScore: "Pending",
+                        errorClass: "ParseError",
+                        errorDetail: parseErr.message,
+                        modelId
+                    };
+                    lastError = parseErr;
+                    break; // Don't retry parse failures with the fallback model
+                }
+            } catch (err) {
+                lastError = err;
+                const cls = classifyBedrockError(err);
+                console.error(`Bedrock invoke failed (${modelId}) [${cls}]: ${err.name || ''} ${err.message || err}`);
+                // Retry on ValidationException with fallback (covers swapped profile/foundation IDs)
+                if (cls === "ValidationException" && modelId !== modelsToTry[modelsToTry.length - 1]) {
+                    continue;
+                }
+                aiEvaluation = {
+                    status: "failed",
+                    note: cls === "AccessDeniedException"
+                        ? "Bedrock access denied. The Lambda role lacks permission for this model, or model access has not been granted in the Bedrock console for this region."
+                        : cls === "ResourceNotFoundException"
+                            ? "Bedrock model not found in this region. Verify the model ID and that the model is enabled for the deployment region."
+                            : cls === "ValidationException"
+                                ? "Bedrock rejected the request payload or model ID (likely needs an inference profile)."
+                                : cls === "ThrottlingException"
+                                    ? "Bedrock throttled the request. A reviewer will retry or assign a score manually."
+                                    : cls === "TimeoutException"
+                                        ? "Bedrock request timed out. The Lambda timeout may need to be increased."
+                                        : "Failed to reach Amazon Bedrock API or parse response.",
+                    suggestedScore: "Pending",
+                    errorClass: cls,
+                    errorDetail: (err && err.message) ? String(err.message).slice(0, 500) : null,
+                    modelId
+                };
+                break;
+            }
+        }
+        if (lastError && aiEvaluation.status === "evaluating") {
+            aiEvaluation = {
+                status: "failed",
+                note: "Failed to reach Amazon Bedrock API or parse response.",
+                suggestedScore: "Pending",
+                errorClass: classifyBedrockError(lastError),
+                errorDetail: (lastError && lastError.message) ? String(lastError.message).slice(0, 500) : null,
+                modelId: modelsToTry[modelsToTry.length - 1]
+            };
         }
 
         const finalData = {

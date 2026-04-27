@@ -12,7 +12,62 @@ interface AssessmentEngineProps {
 
 type StepUpload = { key: string; filename: string };
 
-const SCREENSHOT_TAG = /\[\s*screenshot\s+required\s*\]/i;
+const EXPLICIT_SCREENSHOT_TAG = /\[\s*screenshot\s+required\s*\]/i;
+const EXPLICIT_NO_UPLOAD_TAG = /\[\s*no\s+upload\s*\]/i;
+
+// Words that strongly imply a candidate must produce a file/screenshot for this step.
+// Matched against the step's body text (case-insensitive). Single mention is enough.
+const UPLOAD_KEYWORDS = [
+  'screenshot',
+  'screen shot',
+  'screen capture',
+  'screen-capture',
+  'attach',
+  'attachment',
+  'upload',
+  'evidence',
+  'deliverable',
+  'capture',
+  'image of',
+  'photo of',
+  'picture of',
+  'snapshot',
+  'png',
+  'jpg',
+  'jpeg',
+  'pdf'
+];
+
+// Step titles that look like the assessment intro/identity/final review
+// — never require uploads on those even if their body mentions screenshots.
+const NON_TASK_HEADINGS = [
+  /^\s*#+\s*overview/i,
+  /^\s*#+\s*candidate\s+instructions/i,
+  /^\s*#+\s*purpose/i,
+  /^\s*#+\s*final\s+review/i,
+  /^\s*#+\s*scoring/i,
+  /^\s*#+\s*welcome/i,
+];
+
+const stripExplicitTags = (text: string) => text
+  .replace(EXPLICIT_SCREENSHOT_TAG, '')
+  .replace(EXPLICIT_NO_UPLOAD_TAG, '');
+
+const inferRequiresUpload = (chunk: string): boolean => {
+  if (!chunk) return false;
+  const trimmed = chunk.trim();
+  if (!trimmed) return false;
+  if (EXPLICIT_NO_UPLOAD_TAG.test(trimmed)) return false;
+  if (EXPLICIT_SCREENSHOT_TAG.test(trimmed)) return true;
+
+  // Skip non-task sections (intro, scoring, etc.)
+  for (const pattern of NON_TASK_HEADINGS) {
+    if (pattern.test(trimmed)) return false;
+  }
+
+  const lower = trimmed.toLowerCase();
+  return UPLOAD_KEYWORDS.some(kw => lower.includes(kw));
+};
 
 export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownContent, onCandidateStart }) => {
   const [hasStarted, setHasStarted] = useState(false);
@@ -63,8 +118,27 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
     .filter(chunk => chunk.trim() !== '');
 
   const stepRequiresScreenshot = (idx: number) => {
+    if (idx === 0) return false;
     const chunk = taskChunks[idx];
-    return chunk ? SCREENSHOT_TAG.test(chunk) : false;
+    return chunk ? inferRequiresUpload(chunk) : false;
+  };
+
+  const stepTitle = (idx: number): string => {
+    const chunk = taskChunks[idx];
+    if (!chunk) return `Step ${idx + 1}`;
+    const lines = chunk.split(/\r?\n/);
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line) continue;
+      // Markdown heading, bold-only line, or first non-empty line.
+      const heading = line.match(/^#+\s*(.+)$/);
+      if (heading) return heading[1].trim();
+      const bold = line.match(/^\*\*(.+)\*\*\s*$/);
+      if (bold) return bold[1].trim();
+      // Use the first 80 chars as a fallback title
+      return line.replace(/^[*\-\s]+/, '').slice(0, 80);
+    }
+    return `Step ${idx + 1}`;
   };
 
   const stepKey = (idx: number) => `step_${idx}`;
@@ -165,6 +239,17 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
     return true;
   };
 
+  const missingRequiredSteps = (): number[] => {
+    const missing: number[] = [];
+    taskChunks.forEach((_, idx) => {
+      if (idx === 0) return;
+      if (stepRequiresScreenshot(idx) && (stepUploads[stepKey(idx)] || []).length === 0) {
+        missing.push(idx);
+      }
+    });
+    return missing;
+  };
+
   if (isSuccess) {
     return (
       <div className="container animate-fade-in" style={{ textAlign: 'center', marginTop: '4rem' }}>
@@ -247,7 +332,7 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
         {currentStep < taskChunks.length ? (
           <div className="card animate-fade-in" style={{ marginBottom: '2rem' }}>
             <div className="markdown-body">
-              <ReactMarkdown>{taskChunks[currentStep]}</ReactMarkdown>
+              <ReactMarkdown>{stripExplicitTags(taskChunks[currentStep])}</ReactMarkdown>
             </div>
 
             {currentStep > 0 && (
@@ -333,7 +418,48 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
               <AlertTriangle size={24} color="var(--accent-color)" />
               Final Review & Submit
             </h3>
-            <p>If you encountered any issues while performing these tasks, please describe them lightly below.</p>
+            <p>Please review what you've completed and what you've uploaded before submitting. Once submitted, you cannot change your responses.</p>
+
+            <div style={{ background: 'var(--bg-color-alt)', padding: '1rem', borderRadius: 'var(--radius-md)', marginBottom: '1.5rem', border: '1px solid var(--border-color)' }}>
+              <p style={{ margin: '0 0 0.75rem 0', fontWeight: 'bold' }}>Evidence summary by step</p>
+              <ul style={{ paddingLeft: '1.25rem', margin: 0, fontSize: '0.9rem' }}>
+                {taskChunks.map((_, idx) => {
+                  if (idx === 0) return null;
+                  const required = stepRequiresScreenshot(idx);
+                  const files = stepUploads[stepKey(idx)] || [];
+                  const completed = !!completedSteps[idx];
+                  return (
+                    <li key={idx} style={{ marginBottom: '0.5rem' }}>
+                      <strong>Task {idx}</strong> — {stepTitle(idx)}{' '}
+                      {completed ? (
+                        <span style={{ color: 'var(--success-color)' }}>(marked complete)</span>
+                      ) : (
+                        <span style={{ color: 'var(--text-muted)' }}>(not marked complete)</span>
+                      )}
+                      <div style={{ marginTop: '0.25rem' }}>
+                        {required ? (
+                          files.length > 0 ? (
+                            <span>
+                              📎 Uploaded: {files.map(f => f.filename).join(', ')}
+                            </span>
+                          ) : (
+                            <span style={{ color: 'var(--error-color)', fontWeight: 600 }}>
+                              ⚠ Required upload missing — please go back and attach evidence.
+                            </span>
+                          )
+                        ) : files.length > 0 ? (
+                          <span>📎 Optional upload: {files.map(f => f.filename).join(', ')}</span>
+                        ) : (
+                          <span style={{ color: 'var(--text-muted)' }}>No upload required.</span>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+
+            <p>If you encountered any issues while performing these tasks, please describe them briefly below.</p>
 
             <textarea
               className="form-control"
@@ -344,25 +470,19 @@ export const AssessmentEngine: React.FC<AssessmentEngineProps> = ({ markdownCont
               style={{ marginBottom: '1.5rem' }}
             ></textarea>
 
-            <div style={{ background: 'var(--bg-color-alt)', padding: '1rem', borderRadius: 'var(--radius-md)', marginBottom: '1.5rem', border: '1px solid var(--border-color)' }}>
-              <p style={{ margin: '0 0 0.5rem 0', fontWeight: 'bold' }}>Evidence summary</p>
-              {Object.keys(stepUploads).length === 0 ? (
-                <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--text-muted)' }}>No screenshots uploaded.</p>
-              ) : (
-                <ul style={{ paddingLeft: '1.25rem', margin: 0, fontSize: '0.9rem' }}>
-                  {Object.entries(stepUploads).map(([k, files]) => (
-                    <li key={k}>
-                      <strong>{k}</strong>: {files.map(f => f.filename).join(', ')}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+            {missingRequiredSteps().length > 0 && (
+              <div style={{ background: 'var(--bg-color-alt)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-md)', marginBottom: '1rem', border: '1px solid var(--error-color)', color: 'var(--error-color)', fontSize: '0.9rem' }}>
+                You still have {missingRequiredSteps().length} step
+                {missingRequiredSteps().length === 1 ? '' : 's'} with required uploads missing
+                (Task {missingRequiredSteps().join(', Task ')}).
+                Please go back and attach the required evidence before submitting.
+              </div>
+            )}
 
             <button
               className="btn btn-primary"
               onClick={handleSubmit}
-              disabled={isSubmitting}
+              disabled={isSubmitting || missingRequiredSteps().length > 0}
               style={{ fontSize: '1.1rem', padding: '1rem 2rem', width: '100%', display: 'flex', justifyContent: 'center', gap: '0.5rem' }}
             >
               {isSubmitting ? 'Submitting...' : 'Submit Assessment Report'}
